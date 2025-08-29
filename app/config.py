@@ -1,6 +1,6 @@
 import os
 from typing import Optional
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings  # Changed from pydantic import
 
 
 class Settings(BaseSettings):
