@@ -1,10 +1,13 @@
 import os
 from typing import Optional
-from pydantic_settings import BaseSettings  # Changed from pydantic import
+from pydantic import ConfigDict
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
+    
+    model_config = ConfigDict(env_file=".env")
     
     # OpenAI Configuration
     openai_api_key: str
@@ -30,9 +33,6 @@ class Settings(BaseSettings):
     # Application Configuration
     debug: bool = False
     log_level: str = "INFO"
-    
-    class Config:
-        env_file = ".env"
 
 
 # Global settings instance

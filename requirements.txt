@@ -3,6 +3,7 @@
 langchain
 langchain-openai
 langchain-pinecone
+langchain-community
 openai
 pinecone-client
 faiss-cpu
@@ -27,6 +28,7 @@ python-dotenv
 pydantic
 pydantic-settings
 requests
+PyJWT
 
 # Development & Testing 
 
