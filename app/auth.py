@@ -1,6 +1,6 @@
 import os
 import jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import HTTPException, Security, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -37,11 +37,11 @@ def create_jwt_token(user_id: str, expires_hours: int = 24) -> str:
     2. Add user management and role-based permissions
     3. Store JWT_SECRET in secure key management system
     """
-    expires = datetime.utcnow() + timedelta(hours=expires_hours)
+    expires = datetime.now(timezone.utc) + timedelta(hours=expires_hours)
     payload = {
         "user_id": user_id,
         "exp": expires,
-        "iat": datetime.utcnow(),
+        "iat": datetime.now(timezone.utc),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
@@ -72,7 +72,7 @@ class RateLimiter:
     
     def is_allowed(self, identifier: str, limit: int = 100, window: int = 3600) -> bool:
         """Check if request is within rate limit."""
-        now = datetime.utcnow().timestamp()
+        now = datetime.now(timezone.utc).timestamp()
         
         if identifier not in self.requests:
             self.requests[identifier] = []
@@ -94,4 +94,3 @@ class RateLimiter:
 
 # Global rate limiter instance
 rate_limiter = RateLimiter()
-

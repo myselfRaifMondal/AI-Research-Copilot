@@ -46,8 +46,9 @@ class TestQueryEndpoint:
     @patch('app.chain.rag_chain.query')
     def test_query_endpoint_success(self, mock_query, test_client, mock_query_response):
         """Test successful query endpoint."""
-        # Create a proper async mock
-        mock_query.return_value = AsyncMock(return_value=mock_query_response)()
+        # Create an AsyncMock that returns the mock response when awaited
+        async_mock = AsyncMock(return_value=mock_query_response)
+        mock_query.return_value = async_mock
         
         # Make request with proper auth
         response = test_client.post(
@@ -106,7 +107,9 @@ class TestQueryEndpoint:
             "query_metadata": {}
         }
         
-        mock_query.return_value = AsyncMock(return_value=mock_response)()
+        # Create an AsyncMock that returns the mock response when awaited
+        async_mock = AsyncMock(return_value=mock_response)
+        mock_query.return_value = async_mock
         
         response = test_client.post(
             "/query", 
