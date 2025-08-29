@@ -2,7 +2,7 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -89,7 +89,7 @@ async def background_ingestion(task_id: str, file_path: str, filename: str):
             "status": "completed" if result["status"] == "success" else "failed",
             "result": result,
             "progress": 100,
-            "completed_at": datetime.utcnow().isoformat()
+            "completed_at": datetime.now(timezone.utc).isoformat()
         }
         
         # Clean up uploaded file
@@ -104,7 +104,7 @@ async def background_ingestion(task_id: str, file_path: str, filename: str):
             "status": "failed",
             "error": str(e),
             "progress": 0,
-            "completed_at": datetime.utcnow().isoformat()
+            "completed_at": datetime.now(timezone.utc).isoformat()
         }
 
 
@@ -120,7 +120,7 @@ async def health_check():
         
         return HealthResponse(
             status="healthy",
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             version="1.0.0",
             vector_store=vector_stats
         )
@@ -171,7 +171,7 @@ async def ingest_document(
             f.write(content)
         
         # Generate task ID and start background processing
-        task_id = f"ingest_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{len(ingestion_tasks)}"
+        task_id = f"ingest_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{len(ingestion_tasks)}"
         
         background_tasks.add_task(
             background_ingestion,
@@ -239,7 +239,7 @@ async def query_documents(
             answer=result["answer"],
             sources=sources,
             query_metadata=result.get("query_metadata", {}),
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
         
     except HTTPException:
@@ -292,4 +292,3 @@ if __name__ == "__main__":
         reload=settings.debug,
         log_level=settings.log_level.lower()
     )
-
