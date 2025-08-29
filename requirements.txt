@@ -1,40 +1,39 @@
 # Core dependencies
-
 langchain
-langchain-openai
-langchain-pinecone
 langchain-community
-openai
+langchain-huggingface
+# Removed: langchain-openai
+# Removed: openai
 pinecone-client
 faiss-cpu
 
-# PDF processing
+# Local AI Models
+transformers
+torch
+sentence-transformers
+accelerate
 
+# PDF processing
 pypdf
 
 # Web framework
-
 fastapi
 uvicorn[standard]
 python-multipart
 
 # Frontend
-
 streamlit
 
 # Utilities
-
 python-dotenv
 pydantic
 pydantic-settings
 requests
 PyJWT
 
-# Development & Testing 
-
+# Development & Testing
 pytest
 pytest-asyncio
 httpx
 black
 flake8
-

@@ -1,9 +1,12 @@
+"""Test configuration and fixtures."""
+
 import os
 import pytest
 from unittest.mock import AsyncMock
 
 # Set test environment variables BEFORE any app imports
-os.environ["OPENAI_API_KEY"] = "sk-test-key-for-testing"
+os.environ["USE_LOCAL_MODELS"] = "true"
+os.environ["LOCAL_LLM_MODEL"] = "microsoft/DialoGPT-medium"
 os.environ["API_KEY"] = "dev-api-key" 
 os.environ["USE_PINECONE"] = "false"
 os.environ["DEBUG"] = "true"
@@ -41,7 +44,8 @@ def mock_query_response():
         "raw_llm_output": "This is a test answer about machine learning in healthcare research.",
         "query_metadata": {
             "retrieved_chunks": 2,
-            "model_used": "gpt-3.5-turbo",
+            "model_used": "microsoft/DialoGPT-medium",
+            "local_model": True,
             "avg_relevance_score": 0.815
         }
     }

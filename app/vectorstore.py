@@ -1,23 +1,44 @@
+"""Vector database abstraction with local embeddings."""
+
 import os
 import logging
 from typing import List, Tuple, Optional, Any, Dict
 from langchain_community.vectorstores import FAISS
-from langchain_pinecone import PineconeVectorStore
-from langchain_openai import OpenAIEmbeddings
 from langchain.schema import Document
-import pinecone
+from sentence_transformers import SentenceTransformer
+from langchain.embeddings.base import Embeddings
+import numpy as np
+
 from .config import settings
 
 logger = logging.getLogger(__name__)
 
 
+class LocalEmbeddings(Embeddings):
+    """Local embeddings using sentence-transformers."""
+    
+    def __init__(self, model_name: str = None):
+        self.model_name = model_name or settings.local_embedding_model
+        logger.info(f"Loading embedding model: {self.model_name}")
+        self.model = SentenceTransformer(self.model_name)
+        logger.info("Embedding model loaded successfully")
+    
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Embed a list of documents."""
+        embeddings = self.model.encode(texts, convert_to_numpy=True)
+        return embeddings.tolist()
+    
+    def embed_query(self, text: str) -> List[float]:
+        """Embed a single query."""
+        embedding = self.model.encode([text], convert_to_numpy=True)
+        return embedding[0].tolist()
+
+
 class VectorStoreManager:
     """
-    Unified interface for vector databases.
+    Unified interface for vector databases with local embeddings.
     
-    Supports:
-    - FAISS: Local development and self-hosted deployment
-    - Pinecone: Production cloud deployment with managed infrastructure
+    Uses sentence-transformers for completely free, local embeddings.
     """
     
     def __init__(self):
@@ -25,25 +46,25 @@ class VectorStoreManager:
         self.vectorstore = None
         self._initialize_vectorstore()
     
-    def _initialize_embeddings(self) -> OpenAIEmbeddings:
-        """Initialize OpenAI embeddings with cost optimization."""
-        # Use smaller embedding model for cost efficiency
-        # text-embedding-ada-002: $0.0001/1K tokens vs text-embedding-3-large: $0.00013/1K
-        return OpenAIEmbeddings(
-            model="text-embedding-ada-002",
-            openai_api_key=settings.openai_api_key
-        )
+    def _initialize_embeddings(self) -> LocalEmbeddings:
+        """Initialize local embeddings model."""
+        try:
+            return LocalEmbeddings()
+        except Exception as e:
+            logger.error(f"Failed to initialize local embeddings: {e}")
+            raise
     
     def _initialize_vectorstore(self):
         """Initialize vector store based on configuration."""
-        if settings.use_pinecone:
+        if settings.use_pinecone and settings.pinecone_api_key:
             self._initialize_pinecone()
         else:
             self._initialize_faiss()
     
     def _initialize_pinecone(self):
-        """Initialize Pinecone vector store with auto-index creation."""
+        """Initialize Pinecone vector store."""
         try:
+            from langchain_pinecone import PineconeVectorStore
             import pinecone as pc
             
             # Initialize Pinecone client
@@ -58,7 +79,7 @@ class VectorStoreManager:
                 logger.info(f"Creating Pinecone index: {index_name}")
                 pc.create_index(
                     name=index_name,
-                    dimension=1536,  # OpenAI ada-002 embedding dimension
+                    dimension=384,  # sentence-transformers/all-MiniLM-L6-v2 dimension
                     metric="cosine"
                 )
                 
@@ -84,11 +105,11 @@ class VectorStoreManager:
                 self.vectorstore = FAISS.load_local(
                     faiss_path, 
                     self.embeddings,
-                    allow_dangerous_deserialization=True  # Note: only for development
+                    allow_dangerous_deserialization=True
                 )
                 logger.info("Loaded existing FAISS index")
             else:
-                # Create empty FAISS index
+                # Will create on first ingestion
                 self.vectorstore = None
                 logger.info("FAISS index will be created on first ingestion")
                 
@@ -97,21 +118,15 @@ class VectorStoreManager:
             self.vectorstore = None
     
     def add_documents(self, documents: List[Document]) -> List[str]:
-        """
-        Add documents to vector store with batch processing for cost optimization.
-        
-        Cost optimization notes:
-        - Batch embeddings to reduce API calls
-        - Use cheaper embedding model (ada-002)
-        - Consider local embedding models for high-volume scenarios
-        """
+        """Add documents to vector store."""
         try:
             if not documents:
                 return []
             
             if self.vectorstore is None:
                 # Create new vector store
-                if settings.use_pinecone:
+                if settings.use_pinecone and settings.pinecone_api_key:
+                    from langchain_pinecone import PineconeVectorStore
                     self.vectorstore = PineconeVectorStore.from_documents(
                         documents,
                         embedding=self.embeddings,
@@ -146,14 +161,7 @@ class VectorStoreManager:
         k: int = None,
         score_threshold: float = 0.7
     ) -> List[Tuple[Document, float]]:
-        """
-        Perform similarity search with relevance scoring.
-        
-        Args:
-            query: Search query
-            k: Number of results to return (default from settings)
-            score_threshold: Minimum similarity score threshold
-        """
+        """Perform similarity search."""
         if self.vectorstore is None:
             logger.warning("Vector store not initialized")
             return []
@@ -167,7 +175,7 @@ class VectorStoreManager:
             # Filter by score threshold (lower scores = higher similarity for cosine distance)
             filtered_results = [
                 (doc, score) for doc, score in docs_with_scores
-                if score <= (1 - score_threshold)  # Convert to similarity score
+                if score <= (1 - score_threshold)
             ]
             
             logger.info(f"Retrieved {len(filtered_results)} relevant documents")
@@ -184,16 +192,22 @@ class VectorStoreManager:
                 return {
                     "type": "FAISS",
                     "index_size": self.vectorstore.index.ntotal if self.vectorstore else 0,
-                    "local_path": "vectordb/faiss_index"
+                    "local_path": "vectordb/faiss_index",
+                    "embedding_model": self.embeddings.model_name
                 }
             elif self.vectorstore:
                 return {
                     "type": "Pinecone",
                     "index_name": settings.pinecone_index_name,
-                    "environment": settings.pinecone_environment
+                    "environment": settings.pinecone_environment,
+                    "embedding_model": self.embeddings.model_name
                 }
             else:
-                return {"type": "Not initialized", "index_size": 0}
+                return {
+                    "type": "Not initialized", 
+                    "index_size": 0,
+                    "embedding_model": self.embeddings.model_name
+                }
                 
         except Exception as e:
             logger.error(f"Error getting vector store stats: {e}")
@@ -202,4 +216,3 @@ class VectorStoreManager:
 
 # Global vector store manager
 vector_store = VectorStoreManager()
-

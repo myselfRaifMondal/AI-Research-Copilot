@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # FastAPI Backend
   api:
@@ -45,26 +43,7 @@ services:
     restart: unless-stopped
     command: ["streamlit", "run", "ui/streamlit_app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
 
-  # Redis (optional for production caching and rate limiting)
-  # Uncomment when deploying to production
-  # redis:
-  #   image: redis:7-alpine
-  #   container_name: ai-research-redis
-  #   ports:
-  #     - "6379:6379"
-  #   volumes:
-  #     - redis_data:/data
-  #   restart: unless-stopped
-
-# Optional volumes for persistent data
-volumes:
-  vectordb_data:
-    driver: local
-  # redis_data:
-  #   driver: local
-
 # Network for service communication
 networks:
   default:
     name: ai-research-network
-
