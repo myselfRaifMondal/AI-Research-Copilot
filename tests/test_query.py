@@ -43,19 +43,19 @@ class TestHealthEndpoint:
 class TestQueryEndpoint:
     """Test query endpoint functionality."""
     
-    @patch('app.chain.rag_chain.query')
-    def test_query_endpoint_success(self, mock_query, test_client, mock_query_response):
+    def test_query_endpoint_success(self, test_client, mock_query_response):
         """Test successful query endpoint."""
-        # Create an AsyncMock that returns the mock response when awaited
-        async_mock = AsyncMock(return_value=mock_query_response)
-        mock_query.return_value = async_mock
-        
-        # Make request with proper auth
-        response = test_client.post(
-            "/query",
-            json={"question": "What are the main findings about machine learning in healthcare?"},
-            headers={"Authorization": "Bearer dev-api-key"}
-        )
+        # Patch the entire rag_chain object and mock its query method
+        with patch('app.server.rag_chain') as mock_rag_chain:
+            # Create an AsyncMock for the query method
+            mock_rag_chain.query = AsyncMock(return_value=mock_query_response)
+            
+            # Make request with proper auth
+            response = test_client.post(
+                "/query",
+                json={"question": "What are the main findings about machine learning in healthcare?"},
+                headers={"Authorization": "Bearer dev-api-key"}
+            )
         
         assert response.status_code == 200
         
@@ -98,8 +98,7 @@ class TestQueryEndpoint:
         
         assert response.status_code == 422  # Validation error
     
-    @patch('app.chain.rag_chain.query')
-    def test_query_endpoint_max_sources(self, mock_query, test_client):
+    def test_query_endpoint_max_sources(self, test_client):
         """Test query endpoint with max_sources parameter."""
         mock_response = {
             "answer": "Test answer",
@@ -107,15 +106,16 @@ class TestQueryEndpoint:
             "query_metadata": {}
         }
         
-        # Create an AsyncMock that returns the mock response when awaited
-        async_mock = AsyncMock(return_value=mock_response)
-        mock_query.return_value = async_mock
-        
-        response = test_client.post(
-            "/query", 
-            json={"question": "Test question", "max_sources": 3},
-            headers={"Authorization": "Bearer dev-api-key"}
-        )
+        # Patch the entire rag_chain object and mock its query method
+        with patch('app.server.rag_chain') as mock_rag_chain:
+            # Create an AsyncMock for the query method
+            mock_rag_chain.query = AsyncMock(return_value=mock_response)
+            
+            response = test_client.post(
+                "/query", 
+                json={"question": "Test question", "max_sources": 3},
+                headers={"Authorization": "Bearer dev-api-key"}
+            )
         
         assert response.status_code == 200
         data = response.json()
