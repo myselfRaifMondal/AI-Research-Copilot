@@ -1,13 +1,12 @@
-"""Vector database abstraction with local embeddings."""
+"""Vector database abstraction with local embeddings - FIXED PATHS."""
 
 import os
 import logging
 from typing import List, Tuple, Optional, Any, Dict
 from langchain_community.vectorstores import FAISS
 from langchain.schema import Document
-from sentence_transformers import SentenceTransformer
 from langchain.embeddings.base import Embeddings
-import numpy as np
+from sentence_transformers import SentenceTransformer
 
 from .config import settings
 
@@ -15,30 +14,38 @@ logger = logging.getLogger(__name__)
 
 
 class LocalEmbeddings(Embeddings):
-    """Local embeddings using sentence-transformers."""
+    """Fixed local embeddings without recursion issues."""
     
     def __init__(self, model_name: str = None):
         self.model_name = model_name or settings.local_embedding_model
         logger.info(f"Loading embedding model: {self.model_name}")
-        self.model = SentenceTransformer(self.model_name)
-        logger.info("Embedding model loaded successfully")
+        self._model = None
+        self._initialize_model()
+    
+    def _initialize_model(self):
+        """Initialize the model safely."""
+        if self._model is None:
+            self._model = SentenceTransformer(self.model_name)
+            logger.info("Embedding model loaded successfully")
     
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Embed a list of documents."""
-        embeddings = self.model.encode(texts, convert_to_numpy=True)
+        if not texts:
+            return []
+        self._initialize_model()
+        embeddings = self._model.encode(texts, convert_to_tensor=False)
         return embeddings.tolist()
     
     def embed_query(self, text: str) -> List[float]:
         """Embed a single query."""
-        embedding = self.model.encode([text], convert_to_numpy=True)
+        self._initialize_model()
+        embedding = self._model.encode([text], convert_to_tensor=False)
         return embedding[0].tolist()
 
 
 class VectorStoreManager:
     """
     Unified interface for vector databases with local embeddings.
-    
-    Uses sentence-transformers for completely free, local embeddings.
     """
     
     def __init__(self):
@@ -55,7 +62,7 @@ class VectorStoreManager:
             raise
     
     def _initialize_vectorstore(self):
-        """Initialize vector store based on configuration."""
+        """Initialize vector store with proper path handling."""
         if settings.use_pinecone and settings.pinecone_api_key:
             self._initialize_pinecone()
         else:
@@ -67,23 +74,20 @@ class VectorStoreManager:
             from langchain_pinecone import PineconeVectorStore
             import pinecone as pc
             
-            # Initialize Pinecone client
             pc.init(
                 api_key=settings.pinecone_api_key,
                 environment=settings.pinecone_environment
             )
             
-            # Check if index exists, create if not
             index_name = settings.pinecone_index_name
             if index_name not in pc.list_indexes():
                 logger.info(f"Creating Pinecone index: {index_name}")
                 pc.create_index(
                     name=index_name,
-                    dimension=384,  # sentence-transformers/all-MiniLM-L6-v2 dimension
+                    dimension=384,
                     metric="cosine"
                 )
                 
-            # Initialize vector store
             self.vectorstore = PineconeVectorStore(
                 index_name=index_name,
                 embedding=self.embeddings
@@ -96,22 +100,44 @@ class VectorStoreManager:
             self._initialize_faiss()
     
     def _initialize_faiss(self):
-        """Initialize FAISS vector store for local development."""
-        faiss_path = "vectordb/faiss_index"
-        
+        """Initialize FAISS vector store with flexible path detection."""
         try:
-            if os.path.exists(f"{faiss_path}.faiss"):
-                # Load existing FAISS index
-                self.vectorstore = FAISS.load_local(
-                    faiss_path, 
-                    self.embeddings,
-                    allow_dangerous_deserialization=True
-                )
-                logger.info("Loaded existing FAISS index")
-            else:
-                # Will create on first ingestion
+            # Try different possible locations for FAISS files
+            possible_paths = [
+                "vectordb/faiss_index",  # Standard format: vectordb/faiss_index.faiss, vectordb/faiss_index.pkl
+                "vectordb/faiss_index/index"  # Directory format: vectordb/faiss_index/index.faiss, vectordb/faiss_index/index.pkl
+            ]
+            
+            loaded = False
+            
+            for faiss_path in possible_paths:
+                try:
+                    faiss_file = f"{faiss_path}.faiss"
+                    pkl_file = f"{faiss_path}.pkl"
+                    
+                    logger.info(f"Checking for FAISS files at: {faiss_path}")
+                    logger.info(f"Looking for: {faiss_file} and {pkl_file}")
+                    
+                    if os.path.exists(faiss_file) and os.path.exists(pkl_file):
+                        logger.info(f"Found FAISS files at: {faiss_path}")
+                        
+                        self.vectorstore = FAISS.load_local(
+                            faiss_path,
+                            self.embeddings,
+                            allow_dangerous_deserialization=True
+                        )
+                        
+                        logger.info(f"✅ Loaded existing FAISS index with {self.vectorstore.index.ntotal} vectors")
+                        loaded = True
+                        break
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to load from {faiss_path}: {e}")
+                    continue
+            
+            if not loaded:
+                logger.info("No existing FAISS index found - will create on first document addition")
                 self.vectorstore = None
-                logger.info("FAISS index will be created on first ingestion")
                 
         except Exception as e:
             logger.error(f"FAISS initialization error: {e}")
@@ -134,16 +160,18 @@ class VectorStoreManager:
                     )
                 else:
                     self.vectorstore = FAISS.from_documents(documents, self.embeddings)
-                    # Save FAISS index locally
-                    os.makedirs("vectordb", exist_ok=True)
-                    self.vectorstore.save_local("vectordb/faiss_index")
+                    # Save FAISS index in directory format (what FAISS expects)
+                    os.makedirs("vectordb/faiss_index", exist_ok=True)
+                    self.vectorstore.save_local("vectordb/faiss_index/index")
                 
                 logger.info(f"Created new vector store with {len(documents)} documents")
             else:
                 # Add to existing vector store
                 if isinstance(self.vectorstore, FAISS):
                     self.vectorstore.add_documents(documents)
-                    self.vectorstore.save_local("vectordb/faiss_index")
+                    # Save in the format that was successfully loaded
+                    os.makedirs("vectordb/faiss_index", exist_ok=True)
+                    self.vectorstore.save_local("vectordb/faiss_index/index")
                 else:
                     self.vectorstore.add_documents(documents)
                 
@@ -169,10 +197,8 @@ class VectorStoreManager:
         k = k or settings.retrieval_k
         
         try:
-            # Get documents with scores
             docs_with_scores = self.vectorstore.similarity_search_with_score(query, k=k)
             
-            # Filter by score threshold (lower scores = higher similarity for cosine distance)
             filtered_results = [
                 (doc, score) for doc, score in docs_with_scores
                 if score <= (1 - score_threshold)
@@ -206,7 +232,7 @@ class VectorStoreManager:
                 return {
                     "type": "Not initialized", 
                     "index_size": 0,
-                    "embedding_model": self.embeddings.model_name
+                    "embedding_model": getattr(self.embeddings, 'model_name', 'Unknown')
                 }
                 
         except Exception as e:
