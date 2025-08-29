@@ -1,49 +1,8 @@
 import pytest
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-from fastapi.testclient import TestClient
+from unittest.mock import Mock, patch, AsyncMock
 
-# Set test environment variables before importing app
-import os
-os.environ.setdefault("OPENAI_API_KEY", "sk-test-key-for-testing")
-os.environ.setdefault("API_KEY", "dev-api-key")
-os.environ.setdefault("USE_PINECONE", "false")
-
-from app.server import app
-from app.chain import rag_chain
-
-
-@pytest.fixture
-def test_client():
-    """Create test client for FastAPI app."""
-    return TestClient(app)
-
-
-@pytest.fixture
-def mock_query_response():
-    """Mock RAG chain query response."""
-    return {
-        "answer": "This is a test answer about machine learning in healthcare research.",
-        "sources": [
-            {
-                "source": "test_paper.pdf",
-                "page": 1,
-                "score": 0.85,
-                "content_preview": "Machine learning has shown significant promise in healthcare applications..."
-            },
-            {
-                "source": "test_paper.pdf", 
-                "page": 3,
-                "score": 0.78,
-                "content_preview": "The methodology involved training neural networks on clinical data..."
-            }
-        ],
-        "raw_llm_output": "This is a test answer about machine learning in healthcare research.",
-        "query_metadata": {
-            "retrieved_chunks": 2,
-            "model_used": "gpt-3.5-turbo",
-            "avg_relevance_score": 0.815
-        }
-    }
+# Import from conftest which sets up environment
+from .conftest import test_client, mock_query_response
 
 
 class TestHealthEndpoint:
@@ -87,11 +46,8 @@ class TestQueryEndpoint:
     @patch('app.chain.rag_chain.query')
     def test_query_endpoint_success(self, mock_query, test_client, mock_query_response):
         """Test successful query endpoint."""
-        # Mock the async query method
-        async def async_return():
-            return mock_query_response
-        
-        mock_query.return_value = async_return()
+        # Create a proper async mock
+        mock_query.return_value = AsyncMock(return_value=mock_query_response)()
         
         # Make request with proper auth
         response = test_client.post(
@@ -131,15 +87,8 @@ class TestQueryEndpoint:
         
         assert response.status_code == 401
     
-    @patch('app.chain.rag_chain.query')
-    def test_query_endpoint_empty_question(self, mock_query, test_client):
+    def test_query_endpoint_empty_question(self, test_client):
         """Test query endpoint with empty question."""
-        # Mock to avoid actual processing
-        async def async_return():
-            return {"answer": "Empty question", "sources": [], "query_metadata": {}}
-        
-        mock_query.return_value = async_return()
-        
         response = test_client.post(
             "/query",
             json={"question": ""},
@@ -151,14 +100,13 @@ class TestQueryEndpoint:
     @patch('app.chain.rag_chain.query')
     def test_query_endpoint_max_sources(self, mock_query, test_client):
         """Test query endpoint with max_sources parameter."""
-        async def async_return():
-            return {
-                "answer": "Test answer",
-                "sources": [{"source": f"doc{i}.pdf", "page": 1, "score": 0.9} for i in range(10)],
-                "query_metadata": {}
-            }
+        mock_response = {
+            "answer": "Test answer",
+            "sources": [{"source": f"doc{i}.pdf", "page": 1, "score": 0.9} for i in range(10)],
+            "query_metadata": {}
+        }
         
-        mock_query.return_value = async_return()
+        mock_query.return_value = AsyncMock(return_value=mock_response)()
         
         response = test_client.post(
             "/query", 
@@ -178,8 +126,9 @@ class TestRAGChain:
     @patch('app.chain.rag_chain.llm')
     def test_query_sync_success(self, mock_llm, mock_similarity_search):
         """Test synchronous RAG chain query."""
-        # Mock retrieved documents
+        # Import here to avoid circular import issues
         from langchain.schema import Document
+        from app.chain import rag_chain
         
         mock_docs = [
             (Document(
@@ -193,7 +142,7 @@ class TestRAGChain:
         ]
         mock_similarity_search.return_value = mock_docs
         
-        # Mock LLM response - use a mock object that behaves like ChatOpenAI
+        # Mock LLM response
         mock_response = Mock()
         mock_response.content = "Machine learning has shown significant potential in healthcare applications."
         mock_llm.invoke.return_value = mock_response
@@ -215,6 +164,8 @@ class TestRAGChain:
     @patch('app.vectorstore.vector_store.similarity_search')
     def test_query_sync_no_documents(self, mock_similarity_search):
         """Test RAG chain when no documents are found."""
+        from app.chain import rag_chain
+        
         mock_similarity_search.return_value = []
         
         result = rag_chain.query_sync("Test question")
@@ -225,6 +176,8 @@ class TestRAGChain:
     @patch('app.vectorstore.vector_store.similarity_search')
     def test_query_sync_error_handling(self, mock_similarity_search):
         """Test RAG chain error handling."""
+        from app.chain import rag_chain
+        
         mock_similarity_search.side_effect = Exception("Vector search failed")
         
         result = rag_chain.query_sync("Test question")
@@ -303,9 +256,11 @@ class TestAsyncFunctionality:
     
     @patch('app.vectorstore.vector_store.similarity_search')
     @patch('app.chain.rag_chain.llm')
+    @pytest.mark.asyncio
     async def test_async_query(self, mock_llm, mock_similarity_search):
         """Test async query functionality."""
         from langchain.schema import Document
+        from app.chain import rag_chain
         
         # Mock documents
         mock_docs = [
