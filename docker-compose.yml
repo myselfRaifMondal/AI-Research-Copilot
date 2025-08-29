@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend
+  api:
+    build: 
+      context: .
+      target: production
+    container_name: ai-research-api
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - USE_PINECONE=${USE_PINECONE:-false}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_ENVIRONMENT=${PINECONE_ENVIRONMENT:-us-east1-gcp}
+      - API_KEY=${API_KEY:-dev-api-key}
+      - DEBUG=${DEBUG:-true}
+    volumes:
+      - ./vectordb:/home/app/vectordb
+      - ./data:/home/app/data
+      - ./uploads:/home/app/uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Streamlit Frontend  
+  ui:
+    build: 
+      context: .
+      target: production
+    container_name: ai-research-ui
+    ports:
+      - "8501:8501"
+    environment:
+      - API_BASE_URL=http://api:8000
+      - API_KEY=${API_KEY:-dev-api-key}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    command: ["streamlit", "run", "ui/streamlit_app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+
+  # Redis (optional for production caching and rate limiting)
+  # Uncomment when deploying to production
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: ai-research-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   restart: unless-stopped
+
+# Optional volumes for persistent data
+volumes:
+  vectordb_data:
+    driver: local
+  # redis_data:
+  #   driver: local
+
+# Network for service communication
+networks:
+  default:
+    name: ai-research-network
+
