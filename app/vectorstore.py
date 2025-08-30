@@ -100,48 +100,41 @@ class VectorStoreManager:
             self._initialize_faiss()
     
     def _initialize_faiss(self):
-        """Initialize FAISS vector store with flexible path detection."""
+        """Initialize FAISS vector store with correct path handling."""
         try:
-            # Try different possible locations for FAISS files
-            possible_paths = [
-                "vectordb/faiss_index",  # Standard format: vectordb/faiss_index.faiss, vectordb/faiss_index.pkl
-                "vectordb/faiss_index/index"  # Directory format: vectordb/faiss_index/index.faiss, vectordb/faiss_index/index.pkl
-            ]
+            # FAISS expects the directory containing index.faiss and index.pkl
+            faiss_dir = "vectordb/faiss_index"
             
-            loaded = False
+            logger.info(f"Checking for FAISS files in directory: {faiss_dir}")
             
-            for faiss_path in possible_paths:
-                try:
-                    faiss_file = f"{faiss_path}.faiss"
-                    pkl_file = f"{faiss_path}.pkl"
-                    
-                    logger.info(f"Checking for FAISS files at: {faiss_path}")
-                    logger.info(f"Looking for: {faiss_file} and {pkl_file}")
-                    
-                    if os.path.exists(faiss_file) and os.path.exists(pkl_file):
-                        logger.info(f"Found FAISS files at: {faiss_path}")
-                        
-                        self.vectorstore = FAISS.load_local(
-                            faiss_path,
-                            self.embeddings,
-                            allow_dangerous_deserialization=True
-                        )
-                        
-                        logger.info(f"✅ Loaded existing FAISS index with {self.vectorstore.index.ntotal} vectors")
-                        loaded = True
-                        break
-                        
-                except Exception as e:
-                    logger.warning(f"Failed to load from {faiss_path}: {e}")
-                    continue
+            # Check if the required files exist
+            faiss_file = os.path.join(faiss_dir, "index.faiss")
+            pkl_file = os.path.join(faiss_dir, "index.pkl")
             
-            if not loaded:
-                logger.info("No existing FAISS index found - will create on first document addition")
+            logger.info(f"Looking for: {faiss_file} and {pkl_file}")
+            
+            if os.path.exists(faiss_file) and os.path.exists(pkl_file):
+                logger.info(f"✅ Found FAISS files in: {faiss_dir}")
+                
+                # Load FAISS index - pass the directory path, not the file base name
+                self.vectorstore = FAISS.load_local(
+                    faiss_dir,
+                    self.embeddings,
+                    allow_dangerous_deserialization=True
+                )
+                
+                logger.info(f"✅ Loaded existing FAISS index with {self.vectorstore.index.ntotal} vectors")
+                
+            else:
+                logger.info(f"❌ FAISS files not found:")
+                logger.info(f"  {faiss_file} exists: {os.path.exists(faiss_file)}")
+                logger.info(f"  {pkl_file} exists: {os.path.exists(pkl_file)}")
                 self.vectorstore = None
                 
         except Exception as e:
             logger.error(f"FAISS initialization error: {e}")
             self.vectorstore = None
+
     
     def add_documents(self, documents: List[Document]) -> List[str]:
         """Add documents to vector store."""
