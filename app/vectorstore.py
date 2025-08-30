@@ -191,10 +191,7 @@ class VectorStoreManager:
         
         try:
             docs_with_scores = self.vectorstore.similarity_search_with_score(query, k=k)
-            filtered_results = [
-                (doc, score) for doc, score in docs_with_scores
-                if score <= (1 - score_threshold)
-            ]
+            filtered_results = docs_with_scores[:k]
             logger.info(f"🔍 Found {len(filtered_results)} relevant documents")
             return filtered_results
             
