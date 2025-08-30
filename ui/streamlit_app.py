@@ -281,7 +281,8 @@ def main():
         for sample_q in sample_questions:
             if st.button(f"📝 {sample_q}", key=f"sample_{hash(sample_q)}"):
                 st.session_state.sample_question = sample_q
-                st.experimental_rerun()
+                st.rerun()
+
         
         # Auto-fill sample question
         if 'sample_question' in st.session_state:

@@ -183,21 +183,25 @@ class VectorStoreManager:
             self.vectorstore = None
             raise
     
-    def similarity_search(self, query: str, k: int = 5, score_threshold: float = 0.7) -> List[Tuple[Document, float]]:
-        """Search with error handling."""
+    def similarity_search(self, query: str, k: int = 10, score_threshold: float = 0.7):
         if self.vectorstore is None:
             logger.warning("⚠️  Vector store not initialized")
             return []
         
         try:
             docs_with_scores = self.vectorstore.similarity_search_with_score(query, k=k)
-            filtered_results = docs_with_scores[:k]
+            
+            # Simply return top-k documents converting numpy.float32 to float
+            filtered_results = [(doc, float(score)) for doc, score in docs_with_scores[:k]]
+            
             logger.info(f"🔍 Found {len(filtered_results)} relevant documents")
             return filtered_results
-            
+        
         except Exception as e:
             logger.error(f"❌ Search error: {e}")
             return []
+
+
     
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics with error handling."""
