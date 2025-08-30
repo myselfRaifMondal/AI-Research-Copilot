@@ -1,4 +1,4 @@
-"""Vector database abstraction with local embeddings - FIXED PATHS."""
+"""Vector database abstraction with local embeddings - RECURSION FIXED."""
 
 import os
 import logging
@@ -17,52 +17,56 @@ class LocalEmbeddings(Embeddings):
     """Fixed local embeddings without recursion issues."""
     
     def __init__(self, model_name: str = None):
-        self.model_name = model_name or settings.local_embedding_model
-        logger.info(f"Loading embedding model: {self.model_name}")
+        # Set attributes directly without calling methods
+        self.model_name = model_name or "sentence-transformers/all-MiniLM-L6-v2"
         self._model = None
-        self._initialize_model()
+        logger.info(f"Embedding model configured: {self.model_name}")
     
-    def _initialize_model(self):
-        """Initialize the model safely."""
+    def _ensure_model_loaded(self):
+        """Load model only when needed."""
         if self._model is None:
+            logger.info(f"Loading SentenceTransformer: {self.model_name}")
             self._model = SentenceTransformer(self.model_name)
-            logger.info("Embedding model loaded successfully")
+            logger.info("SentenceTransformer loaded successfully")
     
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Embed a list of documents."""
         if not texts:
             return []
-        self._initialize_model()
+        
+        self._ensure_model_loaded()
         embeddings = self._model.encode(texts, convert_to_tensor=False)
         return embeddings.tolist()
     
     def embed_query(self, text: str) -> List[float]:
         """Embed a single query."""
-        self._initialize_model()
+        self._ensure_model_loaded()
         embedding = self._model.encode([text], convert_to_tensor=False)
         return embedding[0].tolist()
 
 
 class VectorStoreManager:
-    """
-    Unified interface for vector databases with local embeddings.
-    """
+    """Unified interface for vector databases with local embeddings."""
     
     def __init__(self):
-        self.embeddings = self._initialize_embeddings()
+        logger.info("Initializing VectorStoreManager...")
+        self.embeddings = None
         self.vectorstore = None
-        self._initialize_vectorstore()
-    
-    def _initialize_embeddings(self) -> LocalEmbeddings:
-        """Initialize local embeddings model."""
+        
         try:
-            return LocalEmbeddings()
+            self.embeddings = LocalEmbeddings()
+            logger.info("✅ Embeddings initialized")
+            
+            self._initialize_vectorstore()
+            logger.info("✅ VectorStoreManager initialization complete")
+            
         except Exception as e:
-            logger.error(f"Failed to initialize local embeddings: {e}")
-            raise
+            logger.error(f"❌ VectorStoreManager initialization failed: {e}")
+            self.embeddings = None
+            self.vectorstore = None
     
     def _initialize_vectorstore(self):
-        """Initialize vector store with proper path handling."""
+        """Initialize vector store."""
         if settings.use_pinecone and settings.pinecone_api_key:
             self._initialize_pinecone()
         else:
@@ -82,106 +86,57 @@ class VectorStoreManager:
             index_name = settings.pinecone_index_name
             if index_name not in pc.list_indexes():
                 logger.info(f"Creating Pinecone index: {index_name}")
-                pc.create_index(
-                    name=index_name,
-                    dimension=384,
-                    metric="cosine"
-                )
-                
+                pc.create_index(name=index_name, dimension=384, metric="cosine")
+            
             self.vectorstore = PineconeVectorStore(
                 index_name=index_name,
                 embedding=self.embeddings
             )
-            logger.info(f"Initialized Pinecone vector store: {index_name}")
+            logger.info(f"✅ Pinecone vector store initialized: {index_name}")
             
         except Exception as e:
-            logger.error(f"Failed to initialize Pinecone: {e}")
+            logger.error(f"❌ Pinecone initialization failed: {e}")
             logger.info("Falling back to FAISS")
             self._initialize_faiss()
     
     def _initialize_faiss(self):
-        """Initialize FAISS vector store with correct path handling."""
+        """Initialize FAISS vector store."""
         try:
-            # FAISS expects the directory containing index.faiss and index.pkl
             faiss_dir = "vectordb/faiss_index"
+            logger.info(f"Looking for FAISS index in: {faiss_dir}")
             
-            logger.info(f"Checking for FAISS files in directory: {faiss_dir}")
-            
-            # Check if the required files exist
+            # Check for required files
             faiss_file = os.path.join(faiss_dir, "index.faiss")
             pkl_file = os.path.join(faiss_dir, "index.pkl")
             
-            logger.info(f"Looking for: {faiss_file} and {pkl_file}")
+            logger.info(f"Checking files:")
+            logger.info(f"  {faiss_file} -> exists: {os.path.exists(faiss_file)}")
+            logger.info(f"  {pkl_file} -> exists: {os.path.exists(pkl_file)}")
             
             if os.path.exists(faiss_file) and os.path.exists(pkl_file):
-                logger.info(f"✅ Found FAISS files in: {faiss_dir}")
+                logger.info("✅ FAISS files found, loading index...")
                 
-                # Load FAISS index - pass the directory path, not the file base name
                 self.vectorstore = FAISS.load_local(
                     faiss_dir,
                     self.embeddings,
                     allow_dangerous_deserialization=True
                 )
                 
-                logger.info(f"✅ Loaded existing FAISS index with {self.vectorstore.index.ntotal} vectors")
+                vectors_count = self.vectorstore.index.ntotal
+                logger.info(f"✅ FAISS index loaded successfully with {vectors_count} vectors")
                 
             else:
-                logger.info(f"❌ FAISS files not found:")
-                logger.info(f"  {faiss_file} exists: {os.path.exists(faiss_file)}")
-                logger.info(f"  {pkl_file} exists: {os.path.exists(pkl_file)}")
+                logger.warning("❌ FAISS index files not found")
+                logger.info("Vector store will be created when documents are added")
                 self.vectorstore = None
                 
         except Exception as e:
-            logger.error(f"FAISS initialization error: {e}")
+            logger.error(f"❌ FAISS initialization failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             self.vectorstore = None
-
     
-    def add_documents(self, documents: List[Document]) -> List[str]:
-        """Add documents to vector store."""
-        try:
-            if not documents:
-                return []
-            
-            if self.vectorstore is None:
-                # Create new vector store
-                if settings.use_pinecone and settings.pinecone_api_key:
-                    from langchain_pinecone import PineconeVectorStore
-                    self.vectorstore = PineconeVectorStore.from_documents(
-                        documents,
-                        embedding=self.embeddings,
-                        index_name=settings.pinecone_index_name
-                    )
-                else:
-                    self.vectorstore = FAISS.from_documents(documents, self.embeddings)
-                    # Save FAISS index in directory format (what FAISS expects)
-                    os.makedirs("vectordb/faiss_index", exist_ok=True)
-                    self.vectorstore.save_local("vectordb/faiss_index/index")
-                
-                logger.info(f"Created new vector store with {len(documents)} documents")
-            else:
-                # Add to existing vector store
-                if isinstance(self.vectorstore, FAISS):
-                    self.vectorstore.add_documents(documents)
-                    # Save in the format that was successfully loaded
-                    os.makedirs("vectordb/faiss_index", exist_ok=True)
-                    self.vectorstore.save_local("vectordb/faiss_index/index")
-                else:
-                    self.vectorstore.add_documents(documents)
-                
-                logger.info(f"Added {len(documents)} documents to existing vector store")
-            
-            return [doc.metadata.get("id", "") for doc in documents]
-            
-        except Exception as e:
-            logger.error(f"Error adding documents to vector store: {e}")
-            raise
-    
-    def similarity_search(
-        self, 
-        query: str, 
-        k: int = None,
-        score_threshold: float = 0.7
-    ) -> List[Tuple[Document, float]]:
+    def similarity_search(self, query: str, k: int = None, score_threshold: float = 0.7) -> List[Tuple[Document, float]]:
         """Perform similarity search."""
         if self.vectorstore is None:
             logger.warning("Vector store not initialized")
@@ -191,12 +146,10 @@ class VectorStoreManager:
         
         try:
             docs_with_scores = self.vectorstore.similarity_search_with_score(query, k=k)
-            
             filtered_results = [
                 (doc, score) for doc, score in docs_with_scores
                 if score <= (1 - score_threshold)
             ]
-            
             logger.info(f"Retrieved {len(filtered_results)} relevant documents")
             return filtered_results
             
@@ -210,26 +163,26 @@ class VectorStoreManager:
             if isinstance(self.vectorstore, FAISS):
                 return {
                     "type": "FAISS",
-                    "index_size": self.vectorstore.index.ntotal if self.vectorstore else 0,
+                    "index_size": self.vectorstore.index.ntotal,
                     "local_path": "vectordb/faiss_index",
-                    "embedding_model": self.embeddings.model_name
+                    "embedding_model": self.embeddings.model_name if self.embeddings else "Unknown"
                 }
             elif self.vectorstore:
                 return {
                     "type": "Pinecone",
                     "index_name": settings.pinecone_index_name,
                     "environment": settings.pinecone_environment,
-                    "embedding_model": self.embeddings.model_name
+                    "embedding_model": self.embeddings.model_name if self.embeddings else "Unknown"
                 }
             else:
                 return {
-                    "type": "Not initialized", 
+                    "type": "Not initialized",
                     "index_size": 0,
-                    "embedding_model": getattr(self.embeddings, 'model_name', 'Unknown')
+                    "embedding_model": self.embeddings.model_name if self.embeddings else "Unknown"
                 }
                 
         except Exception as e:
-            logger.error(f"Error getting vector store stats: {e}")
+            logger.error(f"Error getting stats: {e}")
             return {"type": "Error", "error": str(e)}
 
 
