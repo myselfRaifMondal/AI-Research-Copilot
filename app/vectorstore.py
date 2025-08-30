@@ -1,4 +1,4 @@
-"""Vector database abstraction with local embeddings - RECURSION FIXED."""
+"""Vector database abstraction - CLEAN IMPLEMENTATION."""
 
 import os
 import logging
@@ -6,172 +6,211 @@ from typing import List, Tuple, Optional, Any, Dict
 from langchain_community.vectorstores import FAISS
 from langchain.schema import Document
 from langchain.embeddings.base import Embeddings
-from sentence_transformers import SentenceTransformer
-
-from .config import settings
 
 logger = logging.getLogger(__name__)
 
+try:
+    from sentence_transformers import SentenceTransformer
+    HAS_SENTENCE_TRANSFORMERS = True
+except ImportError:
+    logger.warning("sentence-transformers not available")
+    HAS_SENTENCE_TRANSFORMERS = False
 
-class LocalEmbeddings(Embeddings):
-    """Fixed local embeddings without recursion issues."""
+from .config import settings
+
+
+class SimpleLocalEmbeddings(Embeddings):
+    """Simple local embeddings without any recursion issues."""
     
-    def __init__(self, model_name: str = None):
-        # Set attributes directly without calling methods
-        self.model_name = model_name or "sentence-transformers/all-MiniLM-L6-v2"
+    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+        self.model_name = model_name
         self._model = None
-        logger.info(f"Embedding model configured: {self.model_name}")
+        logger.info(f"Embeddings configured: {model_name}")
     
-    def _ensure_model_loaded(self):
-        """Load model only when needed."""
+    def _load_model(self):
+        """Load model only when first needed."""
         if self._model is None:
+            if not HAS_SENTENCE_TRANSFORMERS:
+                raise ImportError("sentence-transformers package required")
+            
             logger.info(f"Loading SentenceTransformer: {self.model_name}")
             self._model = SentenceTransformer(self.model_name)
-            logger.info("SentenceTransformer loaded successfully")
+            logger.info("✅ SentenceTransformer loaded successfully")
     
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Embed a list of documents."""
+        """Embed documents."""
         if not texts:
             return []
         
-        self._ensure_model_loaded()
-        embeddings = self._model.encode(texts, convert_to_tensor=False)
-        return embeddings.tolist()
+        self._load_model()
+        try:
+            embeddings = self._model.encode(texts, convert_to_tensor=False, show_progress_bar=False)
+            return embeddings.tolist()
+        except Exception as e:
+            logger.error(f"Error embedding documents: {e}")
+            # Return zero embeddings as fallback
+            return [[0.0] * 384 for _ in texts]
     
     def embed_query(self, text: str) -> List[float]:
-        """Embed a single query."""
-        self._ensure_model_loaded()
-        embedding = self._model.encode([text], convert_to_tensor=False)
-        return embedding[0].tolist()
+        """Embed single query."""
+        self._load_model()
+        try:
+            embedding = self._model.encode([text], convert_to_tensor=False, show_progress_bar=False)
+            return embedding[0].tolist()
+        except Exception as e:
+            logger.error(f"Error embedding query: {e}")
+            # Return zero embedding as fallback
+            return [0.0] * 384
 
 
 class VectorStoreManager:
-    """Unified interface for vector databases with local embeddings."""
+    """Clean vector store manager without recursion issues."""
     
     def __init__(self):
-        logger.info("Initializing VectorStoreManager...")
+        logger.info("🔄 Initializing VectorStoreManager...")
         self.embeddings = None
         self.vectorstore = None
         
         try:
-            self.embeddings = LocalEmbeddings()
+            # Initialize embeddings
+            self.embeddings = SimpleLocalEmbeddings()
             logger.info("✅ Embeddings initialized")
             
-            self._initialize_vectorstore()
-            logger.info("✅ VectorStoreManager initialization complete")
+            # Try to load existing FAISS index
+            self._safe_load_faiss()
+            
+            logger.info("✅ VectorStoreManager ready")
             
         except Exception as e:
-            logger.error(f"❌ VectorStoreManager initialization failed: {e}")
-            self.embeddings = None
-            self.vectorstore = None
+            logger.error(f"❌ VectorStoreManager init failed: {e}")
     
-    def _initialize_vectorstore(self):
-        """Initialize vector store."""
-        if settings.use_pinecone and settings.pinecone_api_key:
-            self._initialize_pinecone()
-        else:
-            self._initialize_faiss()
-    
-    def _initialize_pinecone(self):
-        """Initialize Pinecone vector store."""
-        try:
-            from langchain_pinecone import PineconeVectorStore
-            import pinecone as pc
-            
-            pc.init(
-                api_key=settings.pinecone_api_key,
-                environment=settings.pinecone_environment
-            )
-            
-            index_name = settings.pinecone_index_name
-            if index_name not in pc.list_indexes():
-                logger.info(f"Creating Pinecone index: {index_name}")
-                pc.create_index(name=index_name, dimension=384, metric="cosine")
-            
-            self.vectorstore = PineconeVectorStore(
-                index_name=index_name,
-                embedding=self.embeddings
-            )
-            logger.info(f"✅ Pinecone vector store initialized: {index_name}")
-            
-        except Exception as e:
-            logger.error(f"❌ Pinecone initialization failed: {e}")
-            logger.info("Falling back to FAISS")
-            self._initialize_faiss()
-    
-    def _initialize_faiss(self):
-        """Initialize FAISS vector store."""
+    def _safe_load_faiss(self):
+        """Safely attempt to load FAISS index."""
         try:
             faiss_dir = "vectordb/faiss_index"
-            logger.info(f"Looking for FAISS index in: {faiss_dir}")
             
-            # Check for required files
+            # Check if files exist
             faiss_file = os.path.join(faiss_dir, "index.faiss")
             pkl_file = os.path.join(faiss_dir, "index.pkl")
             
-            logger.info(f"Checking files:")
-            logger.info(f"  {faiss_file} -> exists: {os.path.exists(faiss_file)}")
-            logger.info(f"  {pkl_file} -> exists: {os.path.exists(pkl_file)}")
+            logger.info(f"Checking FAISS files:")
+            logger.info(f"  📄 {faiss_file} -> {os.path.exists(faiss_file)}")
+            logger.info(f"  📄 {pkl_file} -> {os.path.exists(pkl_file)}")
             
             if os.path.exists(faiss_file) and os.path.exists(pkl_file):
-                logger.info("✅ FAISS files found, loading index...")
+                # Check file sizes to ensure they're not corrupted
+                faiss_size = os.path.getsize(faiss_file)
+                pkl_size = os.path.getsize(pkl_file)
                 
-                self.vectorstore = FAISS.load_local(
-                    faiss_dir,
-                    self.embeddings,
-                    allow_dangerous_deserialization=True
-                )
+                logger.info(f"  📊 FAISS file size: {faiss_size:,} bytes")
+                logger.info(f"  📊 PKL file size: {pkl_size:,} bytes")
                 
-                vectors_count = self.vectorstore.index.ntotal
-                logger.info(f"✅ FAISS index loaded successfully with {vectors_count} vectors")
-                
+                if faiss_size > 1000 and pkl_size > 1000:  # Reasonable minimum sizes
+                    logger.info("🔄 Attempting to load FAISS index...")
+                    
+                    # Load with strict error handling
+                    self.vectorstore = FAISS.load_local(
+                        faiss_dir,
+                        self.embeddings,
+                        allow_dangerous_deserialization=True
+                    )
+                    
+                    count = self.vectorstore.index.ntotal
+                    logger.info(f"✅ FAISS index loaded: {count:,} vectors")
+                    
+                else:
+                    logger.warning("⚠️  FAISS files too small - possibly corrupted")
+                    self.vectorstore = None
             else:
-                logger.warning("❌ FAISS index files not found")
-                logger.info("Vector store will be created when documents are added")
+                logger.info("ℹ️  No existing FAISS index found")
                 self.vectorstore = None
                 
         except Exception as e:
-            logger.error(f"❌ FAISS initialization failed: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"❌ Failed to load FAISS index: {e}")
+            logger.info("🔧 Will create new index when documents are added")
             self.vectorstore = None
     
-    def similarity_search(self, query: str, k: int = None, score_threshold: float = 0.7) -> List[Tuple[Document, float]]:
-        """Perform similarity search."""
-        if self.vectorstore is None:
-            logger.warning("Vector store not initialized")
+    def recreate_index(self):
+        """Force recreate the FAISS index from scratch."""
+        logger.info("🔄 Recreating FAISS index...")
+        
+        # Remove existing files
+        faiss_dir = "vectordb/faiss_index"
+        try:
+            if os.path.exists(os.path.join(faiss_dir, "index.faiss")):
+                os.remove(os.path.join(faiss_dir, "index.faiss"))
+            if os.path.exists(os.path.join(faiss_dir, "index.pkl")):
+                os.remove(os.path.join(faiss_dir, "index.pkl"))
+            logger.info("🗑️  Removed corrupted FAISS files")
+        except Exception as e:
+            logger.warning(f"Could not remove old files: {e}")
+        
+        self.vectorstore = None
+        logger.info("✅ Ready to create new index")
+    
+    def add_documents(self, documents: List[Document]) -> List[str]:
+        """Add documents to vector store."""
+        if not documents:
             return []
         
-        k = k or settings.retrieval_k
+        try:
+            if self.vectorstore is None:
+                logger.info(f"🔄 Creating new FAISS index with {len(documents)} documents...")
+                
+                # Create new vector store
+                self.vectorstore = FAISS.from_documents(documents, self.embeddings)
+                
+                # Save it
+                os.makedirs("vectordb/faiss_index", exist_ok=True)
+                self.vectorstore.save_local("vectordb/faiss_index")
+                
+                count = self.vectorstore.index.ntotal
+                logger.info(f"✅ Created FAISS index: {count:,} vectors")
+            else:
+                logger.info(f"➕ Adding {len(documents)} documents to existing index...")
+                
+                self.vectorstore.add_documents(documents)
+                self.vectorstore.save_local("vectordb/faiss_index")
+                
+                count = self.vectorstore.index.ntotal
+                logger.info(f"✅ Updated FAISS index: {count:,} total vectors")
+            
+            return [doc.metadata.get("id", "") for doc in documents]
+            
+        except Exception as e:
+            logger.error(f"❌ Error adding documents: {e}")
+            raise
+    
+    def similarity_search(self, query: str, k: int = 5, score_threshold: float = 0.7) -> List[Tuple[Document, float]]:
+        """Perform similarity search."""
+        if self.vectorstore is None:
+            logger.warning("⚠️  Vector store not initialized")
+            return []
         
         try:
             docs_with_scores = self.vectorstore.similarity_search_with_score(query, k=k)
+            
+            # Filter by threshold
             filtered_results = [
                 (doc, score) for doc, score in docs_with_scores
                 if score <= (1 - score_threshold)
             ]
-            logger.info(f"Retrieved {len(filtered_results)} relevant documents")
+            
+            logger.info(f"🔍 Found {len(filtered_results)} relevant documents")
             return filtered_results
             
         except Exception as e:
-            logger.error(f"Error during similarity search: {e}")
+            logger.error(f"❌ Search error: {e}")
             return []
     
     def get_stats(self) -> Dict[str, Any]:
         """Get vector store statistics."""
         try:
-            if isinstance(self.vectorstore, FAISS):
+            if self.vectorstore:
                 return {
                     "type": "FAISS",
                     "index_size": self.vectorstore.index.ntotal,
                     "local_path": "vectordb/faiss_index",
-                    "embedding_model": self.embeddings.model_name if self.embeddings else "Unknown"
-                }
-            elif self.vectorstore:
-                return {
-                    "type": "Pinecone",
-                    "index_name": settings.pinecone_index_name,
-                    "environment": settings.pinecone_environment,
                     "embedding_model": self.embeddings.model_name if self.embeddings else "Unknown"
                 }
             else:
@@ -180,11 +219,9 @@ class VectorStoreManager:
                     "index_size": 0,
                     "embedding_model": self.embeddings.model_name if self.embeddings else "Unknown"
                 }
-                
         except Exception as e:
-            logger.error(f"Error getting stats: {e}")
             return {"type": "Error", "error": str(e)}
 
 
-# Global vector store manager
+# Global instance
 vector_store = VectorStoreManager()
