@@ -1,4 +1,4 @@
-"""Vector database abstraction - CLEAN IMPLEMENTATION."""
+"""Vector database abstraction - CORRUPTION-RESISTANT VERSION."""
 
 import os
 import logging
@@ -6,196 +6,195 @@ from typing import List, Tuple, Optional, Any, Dict
 from langchain_community.vectorstores import FAISS
 from langchain.schema import Document
 from langchain.embeddings.base import Embeddings
-
-logger = logging.getLogger(__name__)
-
-try:
-    from sentence_transformers import SentenceTransformer
-    HAS_SENTENCE_TRANSFORMERS = True
-except ImportError:
-    logger.warning("sentence-transformers not available")
-    HAS_SENTENCE_TRANSFORMERS = False
+from sentence_transformers import SentenceTransformer
 
 from .config import settings
 
+logger = logging.getLogger(__name__)
 
-class SimpleLocalEmbeddings(Embeddings):
-    """Simple local embeddings without any recursion issues."""
+
+class CorruptionResistantEmbeddings(Embeddings):
+    """Corruption-resistant local embeddings."""
     
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
         self.model_name = model_name
         self._model = None
         logger.info(f"Embeddings configured: {model_name}")
     
-    def _load_model(self):
-        """Load model only when first needed."""
+    def _ensure_loaded(self):
+        """Load model with error handling."""
         if self._model is None:
-            if not HAS_SENTENCE_TRANSFORMERS:
-                raise ImportError("sentence-transformers package required")
-            
-            logger.info(f"Loading SentenceTransformer: {self.model_name}")
-            self._model = SentenceTransformer(self.model_name)
-            logger.info("✅ SentenceTransformer loaded successfully")
+            try:
+                logger.info(f"Loading SentenceTransformer: {self.model_name}")
+                self._model = SentenceTransformer(self.model_name)
+                logger.info("✅ SentenceTransformer loaded")
+            except Exception as e:
+                logger.error(f"❌ Failed to load model: {e}")
+                raise
     
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Embed documents."""
+        """Embed documents with error handling."""
         if not texts:
             return []
         
-        self._load_model()
+        self._ensure_loaded()
         try:
             embeddings = self._model.encode(texts, convert_to_tensor=False, show_progress_bar=False)
             return embeddings.tolist()
         except Exception as e:
-            logger.error(f"Error embedding documents: {e}")
-            # Return zero embeddings as fallback
+            logger.error(f"❌ Embedding error: {e}")
+            # Return zero vectors as fallback to prevent corruption
             return [[0.0] * 384 for _ in texts]
     
     def embed_query(self, text: str) -> List[float]:
-        """Embed single query."""
-        self._load_model()
+        """Embed query with error handling."""
+        self._ensure_loaded()
         try:
             embedding = self._model.encode([text], convert_to_tensor=False, show_progress_bar=False)
             return embedding[0].tolist()
         except Exception as e:
-            logger.error(f"Error embedding query: {e}")
-            # Return zero embedding as fallback
+            logger.error(f"❌ Query embedding error: {e}")
             return [0.0] * 384
 
 
 class VectorStoreManager:
-    """Clean vector store manager without recursion issues."""
+    """Corruption-resistant vector store manager."""
     
     def __init__(self):
         logger.info("🔄 Initializing VectorStoreManager...")
-        self.embeddings = None
+        self.embeddings = CorruptionResistantEmbeddings()
         self.vectorstore = None
-        
-        try:
-            # Initialize embeddings
-            self.embeddings = SimpleLocalEmbeddings()
-            logger.info("✅ Embeddings initialized")
-            
-            # Try to load existing FAISS index
-            self._safe_load_faiss()
-            
-            logger.info("✅ VectorStoreManager ready")
-            
-        except Exception as e:
-            logger.error(f"❌ VectorStoreManager init failed: {e}")
+        self._safe_load_existing_index()
     
-    def _safe_load_faiss(self):
-        """Safely attempt to load FAISS index."""
+    def _safe_load_existing_index(self):
+        """Safely load existing index or create new one."""
+        faiss_dir = "vectordb/faiss_index"
+        
+        if not os.path.exists(faiss_dir):
+            logger.info("📁 No existing index directory found")
+            return
+        
+        faiss_file = os.path.join(faiss_dir, "index.faiss")
+        pkl_file = os.path.join(faiss_dir, "index.pkl")
+        
+        if not (os.path.exists(faiss_file) and os.path.exists(pkl_file)):
+            logger.info("📄 FAISS files not found")
+            return
+        
+        # Check file sizes
+        faiss_size = os.path.getsize(faiss_file)
+        pkl_size = os.path.getsize(pkl_file)
+        
+        logger.info(f"📊 File sizes: FAISS={faiss_size:,}, PKL={pkl_size:,}")
+        
+        if faiss_size < 1000 or pkl_size < 1000:
+            logger.warning("⚠️  Files too small, likely corrupted")
+            self._remove_corrupted_files(faiss_dir)
+            return
+        
+        # Attempt to load with timeout protection
         try:
-            faiss_dir = "vectordb/faiss_index"
+            logger.info("🔄 Attempting to load FAISS index...")
             
-            # Check if files exist
-            faiss_file = os.path.join(faiss_dir, "index.faiss")
-            pkl_file = os.path.join(faiss_dir, "index.pkl")
+            import signal
+            def timeout_handler(signum, frame):
+                raise TimeoutError("FAISS loading timed out")
             
-            logger.info(f"Checking FAISS files:")
-            logger.info(f"  📄 {faiss_file} -> {os.path.exists(faiss_file)}")
-            logger.info(f"  📄 {pkl_file} -> {os.path.exists(pkl_file)}")
+            # Set 30-second timeout for loading
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(30)
             
-            if os.path.exists(faiss_file) and os.path.exists(pkl_file):
-                # Check file sizes to ensure they're not corrupted
-                faiss_size = os.path.getsize(faiss_file)
-                pkl_size = os.path.getsize(pkl_file)
+            try:
+                self.vectorstore = FAISS.load_local(
+                    faiss_dir,
+                    self.embeddings,
+                    allow_dangerous_deserialization=True
+                )
+                signal.alarm(0)  # Cancel timeout
                 
-                logger.info(f"  📊 FAISS file size: {faiss_size:,} bytes")
-                logger.info(f"  📊 PKL file size: {pkl_size:,} bytes")
+                count = self.vectorstore.index.ntotal
+                logger.info(f"✅ Successfully loaded FAISS index: {count:,} vectors")
                 
-                if faiss_size > 1000 and pkl_size > 1000:  # Reasonable minimum sizes
-                    logger.info("🔄 Attempting to load FAISS index...")
-                    
-                    # Load with strict error handling
-                    self.vectorstore = FAISS.load_local(
-                        faiss_dir,
-                        self.embeddings,
-                        allow_dangerous_deserialization=True
-                    )
-                    
-                    count = self.vectorstore.index.ntotal
-                    logger.info(f"✅ FAISS index loaded: {count:,} vectors")
-                    
-                else:
-                    logger.warning("⚠️  FAISS files too small - possibly corrupted")
-                    self.vectorstore = None
-            else:
-                logger.info("ℹ️  No existing FAISS index found")
-                self.vectorstore = None
+            except Exception as load_error:
+                signal.alarm(0)  # Cancel timeout
+                raise load_error
                 
-        except Exception as e:
-            logger.error(f"❌ Failed to load FAISS index: {e}")
-            logger.info("🔧 Will create new index when documents are added")
+        except (RecursionError, TimeoutError, Exception) as e:
+            logger.error(f"❌ Failed to load index: {e}")
+            logger.info("🔧 Removing corrupted files...")
+            self._remove_corrupted_files(faiss_dir)
             self.vectorstore = None
     
-    def recreate_index(self):
-        """Force recreate the FAISS index from scratch."""
-        logger.info("🔄 Recreating FAISS index...")
-        
-        # Remove existing files
-        faiss_dir = "vectordb/faiss_index"
+    def _remove_corrupted_files(self, faiss_dir: str):
+        """Remove corrupted FAISS files."""
         try:
-            if os.path.exists(os.path.join(faiss_dir, "index.faiss")):
-                os.remove(os.path.join(faiss_dir, "index.faiss"))
-            if os.path.exists(os.path.join(faiss_dir, "index.pkl")):
-                os.remove(os.path.join(faiss_dir, "index.pkl"))
-            logger.info("🗑️  Removed corrupted FAISS files")
+            import shutil
+            if os.path.exists(faiss_dir):
+                shutil.rmtree(faiss_dir)
+                logger.info("🗑️  Removed corrupted FAISS directory")
         except Exception as e:
-            logger.warning(f"Could not remove old files: {e}")
-        
+            logger.error(f"Failed to remove corrupted files: {e}")
+    
+    def force_recreate_index(self):
+        """Force recreation of the index."""
+        logger.info("🔄 Forcing index recreation...")
+        self._remove_corrupted_files("vectordb/faiss_index")
         self.vectorstore = None
-        logger.info("✅ Ready to create new index")
+        logger.info("✅ Ready for fresh index creation")
     
     def add_documents(self, documents: List[Document]) -> List[str]:
-        """Add documents to vector store."""
+        """Add documents with corruption protection."""
         if not documents:
             return []
         
         try:
             if self.vectorstore is None:
-                logger.info(f"🔄 Creating new FAISS index with {len(documents)} documents...")
+                logger.info(f"🔄 Creating fresh FAISS index with {len(documents)} documents...")
                 
-                # Create new vector store
+                # Create with error handling
                 self.vectorstore = FAISS.from_documents(documents, self.embeddings)
                 
-                # Save it
+                # Save with corruption protection
                 os.makedirs("vectordb/faiss_index", exist_ok=True)
                 self.vectorstore.save_local("vectordb/faiss_index")
                 
-                count = self.vectorstore.index.ntotal
-                logger.info(f"✅ Created FAISS index: {count:,} vectors")
+                # Verify save was successful
+                if os.path.exists("vectordb/faiss_index/index.faiss"):
+                    count = self.vectorstore.index.ntotal
+                    logger.info(f"✅ Created and saved fresh index: {count:,} vectors")
+                else:
+                    raise Exception("Failed to save FAISS index")
             else:
                 logger.info(f"➕ Adding {len(documents)} documents to existing index...")
                 
+                old_count = self.vectorstore.index.ntotal
                 self.vectorstore.add_documents(documents)
                 self.vectorstore.save_local("vectordb/faiss_index")
                 
-                count = self.vectorstore.index.ntotal
-                logger.info(f"✅ Updated FAISS index: {count:,} total vectors")
+                new_count = self.vectorstore.index.ntotal
+                logger.info(f"✅ Updated index: {old_count:,} -> {new_count:,} vectors")
             
             return [doc.metadata.get("id", "") for doc in documents]
             
         except Exception as e:
             logger.error(f"❌ Error adding documents: {e}")
+            # If corruption occurs during save, clean up
+            self._remove_corrupted_files("vectordb/faiss_index")
+            self.vectorstore = None
             raise
     
     def similarity_search(self, query: str, k: int = 5, score_threshold: float = 0.7) -> List[Tuple[Document, float]]:
-        """Perform similarity search."""
+        """Search with error handling."""
         if self.vectorstore is None:
             logger.warning("⚠️  Vector store not initialized")
             return []
         
         try:
             docs_with_scores = self.vectorstore.similarity_search_with_score(query, k=k)
-            
-            # Filter by threshold
             filtered_results = [
                 (doc, score) for doc, score in docs_with_scores
                 if score <= (1 - score_threshold)
             ]
-            
             logger.info(f"🔍 Found {len(filtered_results)} relevant documents")
             return filtered_results
             
@@ -204,20 +203,20 @@ class VectorStoreManager:
             return []
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get vector store statistics."""
+        """Get statistics with error handling."""
         try:
             if self.vectorstore:
                 return {
                     "type": "FAISS",
                     "index_size": self.vectorstore.index.ntotal,
                     "local_path": "vectordb/faiss_index",
-                    "embedding_model": self.embeddings.model_name if self.embeddings else "Unknown"
+                    "embedding_model": self.embeddings.model_name
                 }
             else:
                 return {
                     "type": "Not initialized",
                     "index_size": 0,
-                    "embedding_model": self.embeddings.model_name if self.embeddings else "Unknown"
+                    "embedding_model": self.embeddings.model_name
                 }
         except Exception as e:
             return {"type": "Error", "error": str(e)}
